@@ -1,0 +1,4 @@
+# Generated into src/Makevars.win by configure.win. Edit this template, not Makevars.win.
+PKG_CPPFLAGS = -I@OB_PREFIX@/include/openbabel3 -I@EIGEN_DIR@ -DHAVE_EIGEN -DHAVE_ISFINITE
+PKG_CXXFLAGS = -Wno-misleading-indentation
+PKG_LIBS = -L@OB_LIBDIR@ -lopenbabel -lz
