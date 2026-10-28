@@ -1,9 +1,17 @@
 #!/bin/sh
-# configure.win -- build a static Open Babel with the Rtools toolchain that R
-# is using, then generate src/Makevars.win from src/Makevars.win.in.
+# configure.win -- find or build Open Babel for Windows, then generate
+# src/Makevars.win from src/Makevars.win.in.
 #
-# If OPEN_BABEL_PREFIX is set and holds include/openbabel3 and a libopenbabel.a,
-# the build step is skipped and that copy is used (handy for caching).
+# Nothing is downloaded or built unless one of these applies:
+#   1. OPEN_BABEL_PREFIX points to an existing Open Babel install
+#      (it must contain include/openbabel3 and lib/libopenbabel.a).
+#      Nothing is downloaded or built. EIGEN_INCLUDE_DIR may point to Eigen 3
+#      headers; if unset, $OPEN_BABEL_PREFIX/include/eigen3 is used.
+#   2. The build runs on R-universe (the MY_UNIVERSE environment variable is
+#      set): Open Babel and Eigen are downloaded and built automatically.
+#   3. CHEMMINEOB_BUILD_OPENBABEL=1 is set: same automatic build, requested
+#      explicitly by the person installing the package.
+# In every other case the install stops with instructions.
 set -e
 
 OB_VERSION=3.1.1
@@ -21,10 +29,24 @@ download() {  # download <url> <destfile>
   "$RSCRIPT" -e "options(timeout=600); download.file('$1', '$2', mode='wb', quiet=TRUE)"
 }
 
-if [ -n "$OPEN_BABEL_PREFIX" ] && [ -d "$OPEN_BABEL_PREFIX/include/openbabel3" ]; then
+if [ -n "$OPEN_BABEL_PREFIX" ]; then
+  # Case 1: the person installing the package supplied Open Babel.
+  [ -d "$OPEN_BABEL_PREFIX/include/openbabel3" ] || {
+    echo "configure.win: OPEN_BABEL_PREFIX is set to '$OPEN_BABEL_PREFIX' but" >&2
+    echo "  '$OPEN_BABEL_PREFIX/include/openbabel3' does not exist." >&2
+    exit 1
+  }
   OB_PREFIX="$OPEN_BABEL_PREFIX"
+  EIGEN_DIR="${EIGEN_INCLUDE_DIR:-$OB_PREFIX/include/eigen3}"
   echo "configure.win: using existing Open Babel at $OB_PREFIX"
-else
+
+elif [ -n "$MY_UNIVERSE" ] || [ "$CHEMMINEOB_BUILD_OPENBABEL" = "1" ]; then
+  # Cases 2 and 3: automatic build.
+  if [ -n "$MY_UNIVERSE" ]; then
+    echo "configure.win: R-universe build detected ($MY_UNIVERSE); building Open Babel"
+  else
+    echo "configure.win: CHEMMINEOB_BUILD_OPENBABEL=1; building Open Babel"
+  fi
   command -v cmake >/dev/null 2>&1 || {
     echo "configure.win: cmake is required to build Open Babel on Windows" >&2
     exit 1
@@ -72,13 +94,33 @@ else
   make -j"$JOBS"
   make install
   cd "$PKGDIR"
+
+else
+  # Case 4: nothing was provided and this is not an automated build.
+  cat >&2 <<'MSG'
+configure.win: Open Babel (>= 3.0.0, static library with headers) and Eigen 3
+headers were not found, and ChemmineOB does not download software during a
+normal install.
+
+Choose one of:
+  1. Install Open Babel and Eigen yourself, then set these environment
+     variables before installing ChemmineOB:
+       OPEN_BABEL_PREFIX  folder with include/openbabel3 and lib/libopenbabel.a
+       EIGEN_INCLUDE_DIR  folder with Eigen 3 headers (optional if they are in
+                          $OPEN_BABEL_PREFIX/include/eigen3)
+  2. Let the installer download and build Open Babel 3.1.1 and Eigen 3.4.0
+     inside the package build folder (needs cmake and internet access):
+       set CHEMMINEOB_BUILD_OPENBABEL=1
+  3. Install a prebuilt binary of ChemmineOB (for example from R-universe)
+     instead of building from source.
+MSG
+  exit 1
 fi
 
-# Find where libopenbabel.a was installed (lib or lib64) and where Eigen is
+# Find where libopenbabel.a is (lib or lib64)
 OB_LIBFILE=$(find "$OB_PREFIX" -name libopenbabel.a | head -n 1)
-[ -n "$OB_LIBFILE" ] || { echo "configure.win: libopenbabel.a not found" >&2; exit 1; }
+[ -n "$OB_LIBFILE" ] || { echo "configure.win: libopenbabel.a not found in $OB_PREFIX" >&2; exit 1; }
 OB_LIBDIR=$(dirname "$OB_LIBFILE")
-[ -n "$EIGEN_DIR" ] || EIGEN_DIR="$OB_PREFIX/include/eigen3"
 
 cd "$PKGDIR"
 sed -e "s|@OB_PREFIX@|$OB_PREFIX|g" \
