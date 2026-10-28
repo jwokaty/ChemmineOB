@@ -1,0 +1,89 @@
+#!/bin/sh
+# configure.win -- build a static Open Babel with the Rtools toolchain that R
+# is using, then generate src/Makevars.win from src/Makevars.win.in.
+#
+# If OPEN_BABEL_PREFIX is set and holds include/openbabel3 and a libopenbabel.a,
+# the build step is skipped and that copy is used (handy for caching).
+set -e
+
+OB_VERSION=3.1.1
+OB_URL="https://github.com/openbabel/openbabel/archive/refs/tags/openbabel-3-1-1.tar.gz"
+OB_SHA256="c97023ac6300d26176c97d4ef39957f06e68848d64f1a04b0b284ccff2744f02"
+OB_TOPDIR="openbabel-openbabel-3-1-1"
+EIGEN_URL="https://gitlab.com/libeigen/eigen/-/archive/3.4.0/eigen-3.4.0.tar.gz"
+EIGEN_TOPDIR="eigen-3.4.0"
+
+PKGDIR=$(pwd -W 2>/dev/null || pwd)
+WORK="$(pwd)/src/ob-build"
+RSCRIPT="${R_HOME}/bin/Rscript"
+
+download() {  # download <url> <destfile>
+  "$RSCRIPT" -e "options(timeout=600); download.file('$1', '$2', mode='wb', quiet=TRUE)"
+}
+
+if [ -n "$OPEN_BABEL_PREFIX" ] && [ -d "$OPEN_BABEL_PREFIX/include/openbabel3" ]; then
+  OB_PREFIX="$OPEN_BABEL_PREFIX"
+  echo "configure.win: using existing Open Babel at $OB_PREFIX"
+else
+  command -v cmake >/dev/null 2>&1 || {
+    echo "configure.win: cmake is required to build Open Babel on Windows" >&2
+    exit 1
+  }
+  mkdir -p "$WORK"
+  cd "$WORK"
+
+  echo "configure.win: downloading Open Babel $OB_VERSION and Eigen"
+  download "$OB_URL" ob.tar.gz
+  echo "$OB_SHA256  ob.tar.gz" | sha256sum -c - >/dev/null || {
+    echo "configure.win: checksum mismatch for Open Babel source" >&2
+    exit 1
+  }
+  download "$EIGEN_URL" eigen.tar.gz
+  tar xzf ob.tar.gz
+  tar xzf eigen.tar.gz
+
+  WORKW=$(pwd -W 2>/dev/null || pwd)
+  OB_PREFIX="$WORKW/install"
+  EIGEN_DIR="$WORKW/$EIGEN_TOPDIR"
+
+  # Use the same compilers R uses to build packages
+  CC=$("${R_HOME}/bin/R" CMD config CC)
+  CXX=$("${R_HOME}/bin/R" CMD config CXX)
+  export CC CXX
+
+  mkdir -p build && cd build
+  # CMAKE_POLICY_VERSION_MINIMUM: Open Babel 3.1.1 declares an old minimum
+  # cmake version, which cmake 4.x refuses without this setting.
+  cmake -G "Unix Makefiles" \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+    -DBUILD_SHARED=OFF \
+    -DBUILD_MIXED=OFF \
+    -DENABLE_TESTS=OFF \
+    -DWITH_MAEPARSER=OFF \
+    -DWITH_COORDGEN=OFF \
+    -DWITH_INCHI=ON \
+    -DRUN_SWIG=OFF \
+    -DEIGEN3_INCLUDE_DIR="$EIGEN_DIR" \
+    -DCMAKE_INSTALL_PREFIX="$OB_PREFIX" \
+    "../$OB_TOPDIR"
+
+  JOBS=$(nproc 2>/dev/null || echo 2)
+  make -j"$JOBS"
+  make install
+  cd "$PKGDIR"
+fi
+
+# Find where libopenbabel.a was installed (lib or lib64) and where Eigen is
+OB_LIBFILE=$(find "$OB_PREFIX" -name libopenbabel.a | head -n 1)
+[ -n "$OB_LIBFILE" ] || { echo "configure.win: libopenbabel.a not found" >&2; exit 1; }
+OB_LIBDIR=$(dirname "$OB_LIBFILE")
+[ -n "$EIGEN_DIR" ] || EIGEN_DIR="$OB_PREFIX/include/eigen3"
+
+cd "$PKGDIR"
+sed -e "s|@OB_PREFIX@|$OB_PREFIX|g" \
+    -e "s|@OB_LIBDIR@|$OB_LIBDIR|g" \
+    -e "s|@EIGEN_DIR@|$EIGEN_DIR|g" \
+    src/Makevars.win.in > src/Makevars.win
+echo "configure.win: wrote src/Makevars.win"
+cat src/Makevars.win

@@ -1,0 +1,2 @@
+#!/bin/sh
+rm -rf src/ob-build src/Makevars.win
